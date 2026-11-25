@@ -514,6 +514,32 @@ func TestBatteryAndWakeOnRTSPLoadFromTheFile(t *testing.T) {
 	}
 }
 
+func TestBatteryPresenceStreamLoadsFromTheFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(path, []byte("listen = \"0.0.0.0:8560\"\n[[camera]]\nname = \"d\"\naddress = \"192.0.2.20\"\nbattery = true\npresence_stream = \"sub\"\n"), 0o600)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Cameras[0].PresenceStreamName(); got != "sub" {
+		t.Fatalf("PresenceStreamName = %q, want sub", got)
+	}
+}
+
+func TestPresenceStreamNeedsABatteryCamera(t *testing.T) {
+	c := &Config{Cameras: []Camera{{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}, PresenceStream: "sub"}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "presence_stream") {
+		t.Fatalf("Validate = %v, want a presence_stream refusal", err)
+	}
+}
+
+func TestPresenceStreamMustBeKnown(t *testing.T) {
+	c := &Config{Cameras: []Camera{{Name: "a", Address: "1.1.1.1", Battery: true, PresenceStream: "bogus"}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "presence_stream") {
+		t.Fatalf("Validate = %v, want a presence_stream refusal", err)
+	}
+}
+
 // #48: motion_wake defaults on, loads off from the file, and is only for a
 // battery camera.
 func TestMotionWake(t *testing.T) {

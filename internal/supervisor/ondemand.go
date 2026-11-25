@@ -41,7 +41,7 @@ var (
 	motionHold = 2 * time.Minute
 )
 
-// Motion tells a battery camera's main stream that the camera reports
+// Motion tells a battery camera's configured presence stream that it reports
 // motion (on) or that the motion is over (off). While it lasts the stream
 // wakes with nobody watching, so the presence stream, and whatever records
 // it, carries the event live instead of the last still; wakeMax still caps
@@ -51,7 +51,7 @@ func (s *Supervisor) Motion(camera string, on bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, e := range s.entries {
-		if e.onDemand && e.cfg.Name == camera && e.cfg.Stream == "main" {
+		if e.onDemand && e.cfg.Name == camera && e.presenceStream {
 			until := time.Now()
 			if on {
 				until = until.Add(motionHold)
@@ -85,7 +85,7 @@ func (s *Supervisor) runOnDemand(ctx context.Context, e *entry) {
 	// behind a Home Hub (no UID) is not searched: the address is the hub's,
 	// and the hub answers for itself, not the camera. Its motion comes
 	// from motion_topic. motion_wake = false turns the watching off (#48).
-	if e.cfg.Stream == "main" && !e.alwaysOn && e.cfg.Address != "" && e.cfg.UID != "" && e.motionWake {
+	if e.presenceStream && !e.alwaysOn && e.cfg.Address != "" && e.cfg.UID != "" && e.motionWake {
 		// Waited for on the way out, so nothing of this camera's is still
 		// running once its stream has stopped.
 		wctx, stop := context.WithCancel(ctx)

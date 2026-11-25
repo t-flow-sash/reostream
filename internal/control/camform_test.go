@@ -359,12 +359,12 @@ func TestCameraListOffersOnlyStreamsTheCameraHas(t *testing.T) {
 
 // The form has no fields for these, so an edit must keep them: saving a
 // battery camera used to drop its motion_topic.
-func TestFormEditKeepsMotionTopicHoldPictureAndAlwaysOn(t *testing.T) {
+func TestFormEditKeepsHiddenCameraSettings(t *testing.T) {
 	cfg := &config.Config{
 		Events: &config.EventsConfig{MQTT: "127.0.0.1:1883"},
 		Cameras: []config.Camera{
 			{Name: "porch", Address: "1.1.1.1", UID: "95270000TESTUID1", Password: "x",
-				MotionTopic: "reostream/argus/motion", HoldPicture: true, AlwaysOn: true},
+				MotionTopic: "reostream/argus/motion", HoldPicture: true, AlwaysOn: true, PresenceStream: "sub"},
 		},
 	}
 	form := url.Values{"name": {"porch"}, "address": {"1.1.1.1"}, "uid": {"95270000TESTUID1"}, "password": {passwordUnchanged}}
@@ -372,7 +372,7 @@ func TestFormEditKeepsMotionTopicHoldPictureAndAlwaysOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	block := cameraBlockText(cfg.Cameras[0])
-	for _, want := range []string{"motion_topic = \"reostream/argus/motion\"\n", "hold_picture = true\n", "always_on = true\n"} {
+	for _, want := range []string{"motion_topic = \"reostream/argus/motion\"\n", "hold_picture = true\n", "always_on = true\n", "presence_stream = \"sub\"\n"} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("block lost %q:\n%s", want, block)
 		}

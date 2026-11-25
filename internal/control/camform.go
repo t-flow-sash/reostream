@@ -152,6 +152,7 @@ func applyCameraForm(cfg *config.Config, form url.Values) error {
 		cam.HoldPicture = existing.HoldPicture
 		cam.MotionTopic = existing.MotionTopic
 		cam.AlwaysOn = existing.AlwaysOn
+		cam.PresenceStream = existing.PresenceStream
 		cam.MotionWake = existing.MotionWake
 		cam.Rotate = existing.Rotate
 		cam.TalkGainDB = existing.TalkGainDB
@@ -339,6 +340,9 @@ func cameraBlockText(cam config.Camera) string {
 	}
 	if cam.WakeOnRTSP {
 		b.WriteString("wake_on_rtsp = true\n")
+	}
+	if cam.PresenceStream != "" {
+		fmt.Fprintf(&b, "presence_stream = %q\n", cam.PresenceStream)
 	}
 	writeList("streams", cam.Streams)
 	writeList("rtsp", cam.RTSP)

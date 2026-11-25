@@ -6,9 +6,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/VoltTech21/reostream/internal/baichuan"
 	"github.com/VoltTech21/reostream/internal/bcudp"
 	"github.com/VoltTech21/reostream/internal/config"
+	"github.com/VoltTech21/reostream/internal/hub"
+	"github.com/VoltTech21/reostream/internal/stream"
 )
+
+type discardPresenceSink struct{}
+
+func (discardPresenceSink) Frame(baichuan.Frame) {}
 
 // A battery camera paired to a Home Hub: a channel of the hub, no UID.
 var hubBattery = config.Camera{Name: "doorbell", Address: "192.0.2.20", Channel: 1,
@@ -105,6 +112,34 @@ func TestRTSPReaderWakesWithWakeOnRTSP(t *testing.T) {
 	}
 	atomic.StoreInt32(&readers, 0)
 	waitFor(t, func() bool { return atomic.LoadInt32(&awake) == 0 })
+}
+
+func TestRTSPReaderWakesConfiguredPresenceStream(t *testing.T) {
+	fastWake(t)
+	cam := hubBattery
+	cam.WakeOnRTSP = true
+	cam.PresenceStream = "sub"
+	woke := make(chan string, 8)
+	var awake, readers int32
+	s := New([]config.Camera{cam}, streamsWoken(woke, &awake))
+	s.AttachPresence(func(string, *hub.Hub) stream.FrameSink { return discardPresenceSink{} })
+	s.AttachRTSPReaders(func(string) int { return int(atomic.LoadInt32(&readers)) })
+	if s.entries["doorbell/sub"].cfg.Sink == nil {
+		t.Fatal("sub does not feed the RTSP presence stream")
+	}
+	if s.entries["doorbell/main"].cfg.Sink != nil {
+		t.Fatal("main still feeds the RTSP presence stream")
+	}
+	start(t, s)
+	atomic.StoreInt32(&readers, 1)
+	select {
+	case st := <-woke:
+		if st != "sub" {
+			t.Fatalf("an RTSP reader woke %s, want sub", st)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("an RTSP reader did not wake the configured presence stream")
+	}
 }
 
 // Without wake_on_rtsp a recorder holding the presence stream open must
