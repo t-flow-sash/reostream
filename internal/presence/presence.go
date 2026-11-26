@@ -85,7 +85,12 @@ type Player struct {
 	clip    *clipAudio
 	shown   time.Time
 
-	clips chan string
+	clips chan queuedClip
+}
+
+type queuedClip struct {
+	path       string
+	generation uint64
 }
 
 // clipAudio is a clip's sound, read in full before it plays.
@@ -98,7 +103,7 @@ type clipAudio struct {
 
 // New builds the player for camera, writing to sink.
 func New(camera string, sink Sink) *Player {
-	return &Player{camera: camera, sink: sink, clips: make(chan string, 8)}
+	return &Player{camera: camera, sink: sink, clips: make(chan queuedClip, 8)}
 }
 
 // Reset starts a new presence-stream generation. A config reload can move a
@@ -155,8 +160,8 @@ func (p *Player) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case path := <-p.clips:
-			p.play(ctx, path)
+		case clip := <-p.clips:
+			p.playGeneration(ctx, clip.path, clip.generation)
 		case <-tick.C:
 			p.mu.Lock()
 			if p.still != nil && time.Since(p.active) >= liveGrace {
@@ -244,14 +249,24 @@ func (p *Player) SeedFrame(codec string, es []byte) {
 
 // Play queues a newly uploaded clip to be played into the stream.
 func (p *Player) Play(path string) {
+	p.mu.Lock()
+	generation := p.generation
+	p.mu.Unlock()
 	select {
-	case p.clips <- path:
+	case p.clips <- queuedClip{path: path, generation: generation}:
 	default:
 		log.Printf("presence: %s: too many clips waiting, skipping %s", p.camera, path)
 	}
 }
 
 func (p *Player) play(ctx context.Context, path string) {
+	p.mu.Lock()
+	generation := p.generation
+	p.mu.Unlock()
+	p.playGeneration(ctx, path, generation)
+}
+
+func (p *Player) playGeneration(ctx context.Context, path string, generation uint64) {
 	t, err := mp4read.Open(path)
 	if err != nil {
 		log.Printf("presence: %s: %v", p.camera, err)
@@ -259,7 +274,10 @@ func (p *Player) play(ctx context.Context, path string) {
 	}
 	defer t.Close()
 	p.mu.Lock()
-	generation := p.generation
+	if p.generation != generation {
+		p.mu.Unlock()
+		return
+	}
 	if p.codec != "" && t.Codec != p.codec {
 		p.mu.Unlock()
 		log.Printf("presence: %s: clip is %s but the stream is %s; not played", p.camera, t.Codec, p.codec)
