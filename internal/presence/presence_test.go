@@ -139,3 +139,25 @@ func TestLiveFramesPassAndOtherCodecsDoNot(t *testing.T) {
 		t.Fatalf("live spacing %d, want the camera's own 66000", d)
 	}
 }
+
+type reconnectSink struct {
+	sink
+	connected int
+}
+
+func (s *reconnectSink) Connected() { s.connected++ }
+
+func TestResetAdoptsANewCodecAndReconnectsTheSink(t *testing.T) {
+	s := &reconnectSink{}
+	p := New("porch", s)
+	p.Frame(baichuan.Frame{Kind: baichuan.FrameIFrame, Codec: "H265", Data: []byte{0, 0, 0, 1, 0x26}, Micros: 1})
+	p.Reset()
+	p.Frame(baichuan.Frame{Kind: baichuan.FrameIFrame, Codec: "H264", Data: []byte{0, 0, 0, 1, 0x65}, Micros: 2})
+	fs := video(s.snapshot())
+	if len(fs) == 0 || fs[len(fs)-1].Codec != "H264" {
+		t.Fatalf("frames after reset = %+v, want H264", fs)
+	}
+	if s.connected != 1 {
+		t.Fatalf("Connected calls = %d, want 1", s.connected)
+	}
+}

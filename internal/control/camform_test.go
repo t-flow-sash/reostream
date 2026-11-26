@@ -379,6 +379,25 @@ func TestFormEditKeepsHiddenCameraSettings(t *testing.T) {
 	}
 }
 
+func TestFormClearsHiddenBatterySettingsWhenBatteryIsUnticked(t *testing.T) {
+	off := false
+	cfg := &config.Config{Cameras: []config.Camera{{
+		Name: "porch", Address: "1.1.1.1", Channel: 1, Battery: true,
+		Streams: []string{"main"}, PresenceStream: "sub", AlwaysOn: true, MotionWake: &off,
+	}}}
+	form := url.Values{
+		"name": {"porch"}, "address": {"1.1.1.1"}, "channel": {"1"},
+		"battery_field": {"1"}, "streams": {"main"},
+	}
+	if err := applyCameraForm(cfg, form); err != nil {
+		t.Fatalf("unticking battery: %v", err)
+	}
+	cam := cfg.Cameras[0]
+	if cam.PresenceStream != "" || cam.AlwaysOn || cam.MotionWake != nil || cam.WakeOnRTSP {
+		t.Fatalf("battery-only settings survived: %+v", cam)
+	}
+}
+
 // The page's camera form has no uid field and a battery camera ticks no
 // streams, so saving one used to fail with "pick at least one stream".
 func TestFormEditOfABatteryCameraKeepsItsUID(t *testing.T) {

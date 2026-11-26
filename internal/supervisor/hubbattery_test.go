@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -139,6 +140,16 @@ func TestRTSPReaderWakesConfiguredPresenceStream(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("an RTSP reader did not wake the configured presence stream")
+	}
+}
+
+func TestImplicitBatteryStreamsIncludeConfiguredPresenceStream(t *testing.T) {
+	cam := hubBattery
+	cam.Streams = nil
+	cam.PresenceStream = "extern"
+	streams, onDemand := cameraStreams(cam)
+	if !onDemand || !slices.Contains(streams, "extern") {
+		t.Fatalf("cameraStreams = %v, %v; want an on-demand extern presence feed", streams, onDemand)
 	}
 }
 

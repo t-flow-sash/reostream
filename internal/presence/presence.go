@@ -65,15 +65,16 @@ type Player struct {
 	camera string
 	sink   Sink
 
-	mu       sync.Mutex
-	codec    string
-	still    []byte
-	clock    uint32 // the stream's own clock, microseconds
-	active   time.Time
-	primed   bool
-	liveLast uint32
-	liveSeen bool
-	playing  bool
+	mu         sync.Mutex
+	codec      string
+	still      []byte
+	clock      uint32 // the stream's own clock, microseconds
+	active     time.Time
+	primed     bool
+	liveLast   uint32
+	liveSeen   bool
+	playing    bool
+	generation uint64
 
 	// audioAt is where the next sound frame starts on the stream's clock,
 	// once audioOn; clip is the audio of the clip being played, if any;
@@ -98,6 +99,31 @@ type clipAudio struct {
 // New builds the player for camera, writing to sink.
 func New(camera string, sink Sink) *Player {
 	return &Player{camera: camera, sink: sink, clips: make(chan string, 8)}
+}
+
+// Reset starts a new presence-stream generation. A config reload can move a
+// battery camera's presence route from H.265 main to H.264 sub; the previous
+// codec and still must not pin the stable RTSP path to the old description.
+func (p *Player) Reset() {
+	p.mu.Lock()
+	p.generation++
+	p.codec = ""
+	p.still = nil
+	p.clock = 0
+	p.active = time.Time{}
+	p.primed = false
+	p.liveLast = 0
+	p.liveSeen = false
+	p.playing = false
+	p.audioAt = 0
+	p.audioOn = false
+	p.clip = nil
+	p.shown = time.Time{}
+	sink := p.sink
+	p.mu.Unlock()
+	if connected, ok := sink.(interface{ Connected() }); ok {
+		connected.Connected()
+	}
 }
 
 var (
@@ -233,6 +259,7 @@ func (p *Player) play(ctx context.Context, path string) {
 	}
 	defer t.Close()
 	p.mu.Lock()
+	generation := p.generation
 	if p.codec != "" && t.Codec != p.codec {
 		p.mu.Unlock()
 		log.Printf("presence: %s: clip is %s but the stream is %s; not played", p.camera, t.Codec, p.codec)
@@ -243,7 +270,9 @@ func (p *Player) play(ctx context.Context, path string) {
 	p.mu.Unlock()
 	defer func() {
 		p.mu.Lock()
-		p.playing = false
+		if p.generation == generation {
+			p.playing = false
+		}
 		p.mu.Unlock()
 	}()
 
@@ -287,6 +316,10 @@ func (p *Player) play(ctx context.Context, path string) {
 			kind = baichuan.FrameIFrame
 		}
 		p.mu.Lock()
+		if p.generation != generation {
+			p.mu.Unlock()
+			return
+		}
 		if s.Key && p.adoptLocked(t.Codec, data) {
 			p.primeLocked()
 		}

@@ -540,6 +540,16 @@ func TestPresenceStreamMustBeKnown(t *testing.T) {
 	}
 }
 
+func TestImplicitPresenceStreamParticipatesInDuplicateValidation(t *testing.T) {
+	c := &Config{Cameras: []Camera{
+		{Name: "battery", Address: "1.1.1.1", Battery: true, PresenceStream: "extern"},
+		{Name: "wired", Address: "1.1.1.1", Streams: []string{"extern"}},
+	}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "share address") {
+		t.Fatalf("Validate() = %v, want duplicate extern rejection", err)
+	}
+}
+
 // #48: motion_wake defaults on, loads off from the file, and is only for a
 // battery camera.
 func TestMotionWake(t *testing.T) {

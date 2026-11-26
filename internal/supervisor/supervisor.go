@@ -251,7 +251,12 @@ func cameraStreams(cam config.Camera) (streams []string, onDemand bool) {
 		return cam.Streams, false
 	}
 	if len(cam.Streams) == 0 {
-		return []string{"sub", "main"}, true
+		streams = []string{"sub", "main"}
+		presence := cam.PresenceStreamName()
+		if !slices.Contains(streams, presence) {
+			streams = append(streams, presence)
+		}
+		return streams, true
 	}
 	streams = slices.Clone(cam.Streams)
 	presence := cam.PresenceStreamName()

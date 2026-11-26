@@ -488,6 +488,11 @@ func (c *Config) Validate() error {
 			}
 			seenStreams[s] = true
 		}
+		if cam.Sleeps() {
+			// The presence feed is an implicit runner even when it is not
+			// listed in streams, so it still owns the physical stream.
+			seenStreams[cam.PresenceStreamName()] = true
+		}
 
 		// A hub serves each of its cameras as a channel on one address, so
 		// it is address and channel together that name one camera.
@@ -495,7 +500,7 @@ func (c *Config) Validate() error {
 		if cam.Channel != 0 {
 			naddr = fmt.Sprintf("%s#%d", naddr, cam.Channel)
 		}
-		for _, s := range cam.Streams {
+		for s := range seenStreams {
 			if owner, taken := seenAddrStreams[naddr][s]; taken {
 				return fmt.Errorf("camera %q and camera %q share address %q on stream %q: "+
 					"a camera allows only one connection per stream, and a second runner "+
@@ -504,9 +509,9 @@ func (c *Config) Validate() error {
 			}
 		}
 		if seenAddrStreams[naddr] == nil {
-			seenAddrStreams[naddr] = make(map[string]string, len(cam.Streams))
+			seenAddrStreams[naddr] = make(map[string]string, len(seenStreams))
 		}
-		for _, s := range cam.Streams {
+		for s := range seenStreams {
 			seenAddrStreams[naddr][s] = cam.Name
 		}
 
