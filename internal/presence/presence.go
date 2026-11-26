@@ -65,15 +65,16 @@ type Player struct {
 	camera string
 	sink   Sink
 
-	mu       sync.Mutex
-	codec    string
-	still    []byte
-	clock    uint32 // the stream's own clock, microseconds
-	active   time.Time
-	primed   bool
-	liveLast uint32
-	liveSeen bool
-	playing  bool
+	mu         sync.Mutex
+	codec      string
+	still      []byte
+	clock      uint32 // the stream's own clock, microseconds
+	active     time.Time
+	primed     bool
+	liveLast   uint32
+	liveSeen   bool
+	playing    bool
+	generation uint64
 
 	// audioAt is where the next sound frame starts on the stream's clock,
 	// once audioOn; clip is the audio of the clip being played, if any;
@@ -84,7 +85,12 @@ type Player struct {
 	clip    *clipAudio
 	shown   time.Time
 
-	clips chan string
+	clips chan queuedClip
+}
+
+type queuedClip struct {
+	path       string
+	generation uint64
 }
 
 // clipAudio is a clip's sound, read in full before it plays.
@@ -97,7 +103,32 @@ type clipAudio struct {
 
 // New builds the player for camera, writing to sink.
 func New(camera string, sink Sink) *Player {
-	return &Player{camera: camera, sink: sink, clips: make(chan string, 8)}
+	return &Player{camera: camera, sink: sink, clips: make(chan queuedClip, 8)}
+}
+
+// Reset starts a new presence-stream generation. A config reload can move a
+// battery camera's presence route from H.265 main to H.264 sub; the previous
+// codec and still must not pin the stable RTSP path to the old description.
+func (p *Player) Reset() {
+	p.mu.Lock()
+	p.generation++
+	p.codec = ""
+	p.still = nil
+	p.clock = 0
+	p.active = time.Time{}
+	p.primed = false
+	p.liveLast = 0
+	p.liveSeen = false
+	p.playing = false
+	p.audioAt = 0
+	p.audioOn = false
+	p.clip = nil
+	p.shown = time.Time{}
+	sink := p.sink
+	p.mu.Unlock()
+	if connected, ok := sink.(interface{ Connected() }); ok {
+		connected.Connected()
+	}
 }
 
 var (
@@ -129,8 +160,8 @@ func (p *Player) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case path := <-p.clips:
-			p.play(ctx, path)
+		case clip := <-p.clips:
+			p.playGeneration(ctx, clip.path, clip.generation)
 		case <-tick.C:
 			p.mu.Lock()
 			if p.still != nil && time.Since(p.active) >= liveGrace {
@@ -186,6 +217,13 @@ func (p *Player) Frame(f baichuan.Frame) {
 // Seed takes the still from a clip already on disk, without playing it:
 // the picture to show until the next clip or live view.
 func (p *Player) Seed(path string) {
+	p.mu.Lock()
+	generation := p.generation
+	p.mu.Unlock()
+	p.seedGeneration(path, generation)
+}
+
+func (p *Player) seedGeneration(path string, generation uint64) {
 	t, err := mp4read.Open(path)
 	if err != nil {
 		return
@@ -201,6 +239,9 @@ func (p *Player) Seed(path string) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.generation != generation {
+		return
+	}
 	if p.adoptLocked(t.Codec, data) {
 		p.primeLocked()
 	}
@@ -218,14 +259,24 @@ func (p *Player) SeedFrame(codec string, es []byte) {
 
 // Play queues a newly uploaded clip to be played into the stream.
 func (p *Player) Play(path string) {
+	p.mu.Lock()
+	generation := p.generation
+	p.mu.Unlock()
 	select {
-	case p.clips <- path:
+	case p.clips <- queuedClip{path: path, generation: generation}:
 	default:
 		log.Printf("presence: %s: too many clips waiting, skipping %s", p.camera, path)
 	}
 }
 
 func (p *Player) play(ctx context.Context, path string) {
+	p.mu.Lock()
+	generation := p.generation
+	p.mu.Unlock()
+	p.playGeneration(ctx, path, generation)
+}
+
+func (p *Player) playGeneration(ctx context.Context, path string, generation uint64) {
 	t, err := mp4read.Open(path)
 	if err != nil {
 		log.Printf("presence: %s: %v", p.camera, err)
@@ -233,17 +284,24 @@ func (p *Player) play(ctx context.Context, path string) {
 	}
 	defer t.Close()
 	p.mu.Lock()
-	if p.codec != "" && t.Codec != p.codec {
+	if p.generation != generation {
 		p.mu.Unlock()
-		log.Printf("presence: %s: clip is %s but the stream is %s; not played", p.camera, t.Codec, p.codec)
-		p.Seed(path)
+		return
+	}
+	if p.codec != "" && t.Codec != p.codec {
+		codec := p.codec
+		p.mu.Unlock()
+		log.Printf("presence: %s: clip is %s but the stream is %s; not played", p.camera, t.Codec, codec)
+		p.seedGeneration(path, generation)
 		return
 	}
 	p.playing = true
 	p.mu.Unlock()
 	defer func() {
 		p.mu.Lock()
-		p.playing = false
+		if p.generation == generation {
+			p.playing = false
+		}
 		p.mu.Unlock()
 	}()
 
@@ -287,6 +345,10 @@ func (p *Player) play(ctx context.Context, path string) {
 			kind = baichuan.FrameIFrame
 		}
 		p.mu.Lock()
+		if p.generation != generation {
+			p.mu.Unlock()
+			return
+		}
 		if s.Key && p.adoptLocked(t.Codec, data) {
 			p.primeLocked()
 		}

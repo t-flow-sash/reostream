@@ -359,12 +359,12 @@ func TestCameraListOffersOnlyStreamsTheCameraHas(t *testing.T) {
 
 // The form has no fields for these, so an edit must keep them: saving a
 // battery camera used to drop its motion_topic.
-func TestFormEditKeepsMotionTopicHoldPictureAndAlwaysOn(t *testing.T) {
+func TestFormEditKeepsHiddenCameraSettings(t *testing.T) {
 	cfg := &config.Config{
 		Events: &config.EventsConfig{MQTT: "127.0.0.1:1883"},
 		Cameras: []config.Camera{
 			{Name: "porch", Address: "1.1.1.1", UID: "95270000TESTUID1", Password: "x",
-				MotionTopic: "reostream/argus/motion", HoldPicture: true, AlwaysOn: true},
+				MotionTopic: "reostream/argus/motion", HoldPicture: true, AlwaysOn: true, PresenceStream: "sub"},
 		},
 	}
 	form := url.Values{"name": {"porch"}, "address": {"1.1.1.1"}, "uid": {"95270000TESTUID1"}, "password": {passwordUnchanged}}
@@ -372,10 +372,29 @@ func TestFormEditKeepsMotionTopicHoldPictureAndAlwaysOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	block := cameraBlockText(cfg.Cameras[0])
-	for _, want := range []string{"motion_topic = \"reostream/argus/motion\"\n", "hold_picture = true\n", "always_on = true\n"} {
+	for _, want := range []string{"motion_topic = \"reostream/argus/motion\"\n", "hold_picture = true\n", "always_on = true\n", "presence_stream = \"sub\"\n"} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("block lost %q:\n%s", want, block)
 		}
+	}
+}
+
+func TestFormClearsHiddenBatterySettingsWhenBatteryIsUnticked(t *testing.T) {
+	off := false
+	cfg := &config.Config{Cameras: []config.Camera{{
+		Name: "porch", Address: "1.1.1.1", Channel: 1, Battery: true,
+		Streams: []string{"main"}, PresenceStream: "sub", AlwaysOn: true, MotionWake: &off,
+	}}}
+	form := url.Values{
+		"name": {"porch"}, "address": {"1.1.1.1"}, "channel": {"1"},
+		"battery_field": {"1"}, "streams": {"main"},
+	}
+	if err := applyCameraForm(cfg, form); err != nil {
+		t.Fatalf("unticking battery: %v", err)
+	}
+	cam := cfg.Cameras[0]
+	if cam.PresenceStream != "" || cam.AlwaysOn || cam.MotionWake != nil || cam.WakeOnRTSP {
+		t.Fatalf("battery-only settings survived: %+v", cam)
 	}
 }
 

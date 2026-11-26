@@ -152,9 +152,16 @@ func applyCameraForm(cfg *config.Config, form url.Values) error {
 		cam.HoldPicture = existing.HoldPicture
 		cam.MotionTopic = existing.MotionTopic
 		cam.AlwaysOn = existing.AlwaysOn
+		cam.PresenceStream = existing.PresenceStream
 		cam.MotionWake = existing.MotionWake
 		cam.Rotate = existing.Rotate
 		cam.TalkGainDB = existing.TalkGainDB
+		if !cam.Sleeps() {
+			cam.AlwaysOn = false
+			cam.MotionWake = nil
+			cam.WakeOnRTSP = false
+			cam.PresenceStream = ""
+		}
 		cfg.Cameras[i] = cam
 		// cfg.Validate: the daemon's own validation runs over the whole
 		// config, so a form submission is held to exactly the rules
@@ -339,6 +346,9 @@ func cameraBlockText(cam config.Camera) string {
 	}
 	if cam.WakeOnRTSP {
 		b.WriteString("wake_on_rtsp = true\n")
+	}
+	if cam.PresenceStream != "" {
+		fmt.Fprintf(&b, "presence_stream = %q\n", cam.PresenceStream)
 	}
 	writeList("streams", cam.Streams)
 	writeList("rtsp", cam.RTSP)

@@ -139,3 +139,70 @@ func TestLiveFramesPassAndOtherCodecsDoNot(t *testing.T) {
 		t.Fatalf("live spacing %d, want the camera's own 66000", d)
 	}
 }
+
+type reconnectSink struct {
+	sink
+	connected int
+}
+
+func (s *reconnectSink) Connected() { s.connected++ }
+
+func TestResetAdoptsANewCodecAndReconnectsTheSink(t *testing.T) {
+	s := &reconnectSink{}
+	p := New("porch", s)
+	p.Frame(baichuan.Frame{Kind: baichuan.FrameIFrame, Codec: "H265", Data: []byte{0, 0, 0, 1, 0x26}, Micros: 1})
+	p.Reset()
+	p.Frame(baichuan.Frame{Kind: baichuan.FrameIFrame, Codec: "H264", Data: []byte{0, 0, 0, 1, 0x65}, Micros: 2})
+	fs := video(s.snapshot())
+	if len(fs) == 0 || fs[len(fs)-1].Codec != "H264" {
+		t.Fatalf("frames after reset = %+v, want H264", fs)
+	}
+	if s.connected != 1 {
+		t.Fatalf("Connected calls = %d, want 1", s.connected)
+	}
+}
+
+func TestResetDropsClipsQueuedByThePreviousCodecGeneration(t *testing.T) {
+	s := &reconnectSink{}
+	p := New("porch", s)
+	p.Play("../mp4read/testdata/h265.mp4")
+	p.Reset()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		p.Run(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	time.Sleep(20 * time.Millisecond)
+	p.Frame(baichuan.Frame{Kind: baichuan.FrameIFrame, Codec: "H264", Data: []byte{0, 0, 0, 1, 0x65}, Micros: 2})
+	fs := video(s.snapshot())
+	if len(fs) == 0 || fs[len(fs)-1].Codec != "H264" {
+		t.Fatalf("frames after stale queued clip = %+v, want H264", fs)
+	}
+	for _, f := range fs {
+		if f.Codec == "H265" {
+			t.Fatalf("stale H265 frame escaped after Reset: %+v", f)
+		}
+	}
+}
+
+func TestResetRejectsAnAsynchronousSeedFromThePreviousGeneration(t *testing.T) {
+	s := &reconnectSink{}
+	p := New("porch", s)
+	p.Reset()
+	p.seedGeneration("../mp4read/testdata/h265.mp4", 0)
+	p.Frame(baichuan.Frame{Kind: baichuan.FrameIFrame, Codec: "H264", Data: []byte{0, 0, 0, 1, 0x65}, Micros: 2})
+	fs := video(s.snapshot())
+	if len(fs) == 0 || fs[len(fs)-1].Codec != "H264" {
+		t.Fatalf("frames after stale seed = %+v, want H264", fs)
+	}
+	for _, f := range fs {
+		if f.Codec == "H265" {
+			t.Fatalf("stale H265 seed escaped after Reset: %+v", f)
+		}
+	}
+}

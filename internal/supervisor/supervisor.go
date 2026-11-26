@@ -108,9 +108,10 @@ type entry struct {
 	alwaysOn bool
 	// motionWake: the camera's sensor wakes are watched (motion_wake).
 	motionWake bool
+	// presenceStream feeds the battery camera's stable RTSP presence path.
+	presenceStream bool
 	// wakeOnRTSP counts readers of the camera's RTSP presence stream as
-	// viewers (config wake_on_rtsp). Only on main, the stream that feeds
-	// the presence stream.
+	// viewers (config wake_on_rtsp). Only on the configured presence stream.
 	wakeOnRTSP bool
 	// rtspReaders, when set, is how many RTSP readers the presence stream
 	// has now. See AttachRTSPReaders.
@@ -155,7 +156,7 @@ type Supervisor struct {
 	// reach the output that wants them.
 	sinkFor func(camera, stream string) stream.FrameSink
 
-	// presenceFor gives a battery camera's on-demand main stream its sink:
+	// presenceFor gives a battery camera's selected on-demand feed its sink:
 	// the presence stream, which a recorder reads without waking the
 	// camera. See AttachPresence.
 	presenceFor func(camera string, h *hub.Hub) stream.FrameSink
@@ -243,18 +244,24 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 // an hour (#38, a Solar Floodlight Cam whose owner had followed the RTSP
 // 404's advice to add "sub" to streams and rtsp).
 //
-// main is always among them, listed or not: it is the stream the presence
-// stream and motion wakes hang off.
+// The configured presence stream is always among them, listed or not: it is
+// the feed the stable RTSP path and motion wakes hang off.
 func cameraStreams(cam config.Camera) (streams []string, onDemand bool) {
 	if !cam.Sleeps() {
 		return cam.Streams, false
 	}
 	if len(cam.Streams) == 0 {
-		return []string{"sub", "main"}, true
+		streams = []string{"sub", "main"}
+		presence := cam.PresenceStreamName()
+		if !slices.Contains(streams, presence) {
+			streams = append(streams, presence)
+		}
+		return streams, true
 	}
 	streams = slices.Clone(cam.Streams)
-	if !slices.Contains(streams, "main") {
-		streams = append(streams, "main")
+	presence := cam.PresenceStreamName()
+	if !slices.Contains(streams, presence) {
+		streams = append(streams, presence)
 	}
 	return streams, true
 }
@@ -278,6 +285,7 @@ func warnBatteryRTSP(cam config.Camera) {
 
 func newEntry(cam config.Camera, st string) *entry {
 	_, onDemand := cameraStreams(cam)
+	presenceStream := onDemand && st == cam.PresenceStreamName()
 	h := hub.New(64)
 	h.SetOnDemand(onDemand)
 	return &entry{
@@ -296,12 +304,13 @@ func newEntry(cam config.Camera, st string) *entry {
 			HoldPicture: cam.HoldPicture,
 			Rotate:      cam.Rotate,
 		},
-		h:          h,
-		stat:       StreamStat{Camera: cam.Name, Stream: st, OnDemand: onDemand},
-		onDemand:   onDemand,
-		alwaysOn:   onDemand && cam.AlwaysOn,
-		motionWake: cam.WakesForMotion(),
-		wakeOnRTSP: onDemand && cam.WakeOnRTSP && st == "main",
+		h:              h,
+		stat:           StreamStat{Camera: cam.Name, Stream: st, OnDemand: onDemand},
+		onDemand:       onDemand,
+		alwaysOn:       onDemand && cam.AlwaysOn,
+		motionWake:     cam.WakesForMotion(),
+		presenceStream: presenceStream,
+		wakeOnRTSP:     presenceStream && cam.WakeOnRTSP,
 	}
 }
 
@@ -349,8 +358,8 @@ func (s *Supervisor) AttachSinks(sinkFor func(camera, stream string) stream.Fram
 	s.mu.Unlock()
 }
 
-// AttachPresence gives each battery camera's main stream the sink built by
-// presenceFor. Call before Run, like AttachSinks.
+// AttachPresence gives each battery camera's configured presence stream the
+// sink built by presenceFor. Call before Run, like AttachSinks.
 func (s *Supervisor) AttachPresence(presenceFor func(camera string, h *hub.Hub) stream.FrameSink) {
 	if s.started.Load() {
 		panic("supervisor: AttachPresence called after Run")
@@ -387,10 +396,10 @@ func (s *Supervisor) applySinkLocked(e *entry) {
 	}
 	// A battery camera's on-demand stream never feeds RTSP directly: a
 	// recorder pulling it would hold the camera awake around the clock.
-	// Its main stream feeds the presence stream instead, which a recorder
+	// Its selected feed goes to the presence stream instead, which a recorder
 	// can hold open because it never reaches the camera.
 	if e.onDemand {
-		if s.presenceFor != nil && e.cfg.Stream == "main" {
+		if s.presenceFor != nil && e.presenceStream {
 			// The hub goes in so the sink can read the camera's kept still
 			// without calling back into the supervisor, whose lock is
 			// held here.
@@ -667,10 +676,12 @@ func (s *Supervisor) Reload(cams []config.Camera) (ReloadResult, error) {
 // drop and rebuild its main stream's camera connection.
 func sameStream(e *entry, cam config.Camera) bool {
 	_, onDemand := cameraStreams(cam)
+	presenceStream := onDemand && e.cfg.Stream == cam.PresenceStreamName()
 	return e.onDemand == onDemand &&
 		e.alwaysOn == (onDemand && cam.AlwaysOn) &&
 		e.motionWake == cam.WakesForMotion() &&
-		e.wakeOnRTSP == (onDemand && cam.WakeOnRTSP && e.cfg.Stream == "main") &&
+		e.presenceStream == presenceStream &&
+		e.wakeOnRTSP == (presenceStream && cam.WakeOnRTSP) &&
 		e.cfg.Sleeps == cam.Sleeps() &&
 		e.cfg.Address == cam.Address &&
 		e.cfg.Channel == cam.Channel &&

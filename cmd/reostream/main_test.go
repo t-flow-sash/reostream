@@ -6,6 +6,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/VoltTech21/reostream/internal/baichuan"
+	"github.com/VoltTech21/reostream/internal/hub"
+	"github.com/VoltTech21/reostream/internal/stream"
 )
 
 // fakeHTTPShutdowner records when Shutdown was called, standing in for
@@ -16,6 +20,53 @@ type fakeHTTPShutdowner struct {
 
 func (f fakeHTTPShutdowner) Shutdown(ctx context.Context) error {
 	return f.fn(ctx)
+}
+
+type codecSink struct {
+	mu        sync.Mutex
+	frames    []baichuan.Frame
+	connected int
+}
+
+func (s *codecSink) Frame(f baichuan.Frame) {
+	s.mu.Lock()
+	s.frames = append(s.frames, f)
+	s.mu.Unlock()
+}
+
+func (s *codecSink) Connected() {
+	s.mu.Lock()
+	s.connected++
+	s.mu.Unlock()
+}
+
+func TestBatteryPresencePlayerReloadChangesCodec(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &codecSink{}
+	name := "reload-codec-" + t.Name()
+	p1 := batteryPresencePlayer(ctx, name, hub.New(1), func() stream.FrameSink { return sink })
+	p1.Frame(baichuan.Frame{Kind: baichuan.FrameIFrame, Codec: "H265", Data: []byte{0, 0, 0, 1, 0x26}, Micros: 1})
+	p2 := batteryPresencePlayer(ctx, name, hub.New(1), func() stream.FrameSink { return sink })
+	if p2 != p1 {
+		t.Fatal("reload replaced the registered player instead of resetting it")
+	}
+	p2.Frame(baichuan.Frame{Kind: baichuan.FrameIFrame, Codec: "H264", Data: []byte{0, 0, 0, 1, 0x65}, Micros: 2})
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	gotH264 := false
+	for _, f := range sink.frames {
+		if f.Codec == "H264" {
+			gotH264 = true
+			break
+		}
+	}
+	if !gotH264 {
+		t.Fatalf("frames after reload contain no H264: %+v", sink.frames)
+	}
+	if sink.connected != 1 {
+		t.Fatalf("Connected calls = %d, want 1", sink.connected)
+	}
 }
 
 func TestRunShutdownCancelsFirstThenWaitsThenShutsDownHTTP(t *testing.T) {

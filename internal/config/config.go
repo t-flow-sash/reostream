@@ -45,6 +45,10 @@ type Camera struct {
 	// the camera awake.
 	WakeOnRTSP bool `toml:"wake_on_rtsp"`
 
+	// PresenceStream selects which camera feed backs a battery camera's
+	// stable RTSP presence path. Empty keeps the full-resolution main feed.
+	PresenceStream string `toml:"presence_stream"`
+
 	// RTSP names which of this camera's streams to serve over RTSP. Absent
 	// means none, and every stream still reaches the HTTP output either way.
 	RTSP []string
@@ -98,6 +102,15 @@ type Camera struct {
 // viewers and so is only ever woken on demand: it has a UID, or it is
 // marked battery (one behind a Home Hub or NVR).
 func (c Camera) Sleeps() bool { return c.UID != "" || c.Battery }
+
+// PresenceStreamName is the feed behind a battery camera's stable RTSP
+// presence path. Existing configurations keep main.
+func (c Camera) PresenceStreamName() string {
+	if c.PresenceStream != "" {
+		return c.PresenceStream
+	}
+	return "main"
+}
 
 // WakesForMotion says whether a battery camera's sensor wakes are watched
 // and wake its stream: motion_wake, on when left out.
@@ -442,6 +455,12 @@ func (c *Config) Validate() error {
 		if cam.WakeOnRTSP && !cam.Sleeps() {
 			return fmt.Errorf("camera %q: wake_on_rtsp is for a battery camera, one with a uid or battery = true", cam.Name)
 		}
+		if cam.PresenceStream != "" && !cam.Sleeps() {
+			return fmt.Errorf("camera %q: presence_stream is for a battery camera, one with a uid or battery = true", cam.Name)
+		}
+		if cam.PresenceStream != "" && !validStreamNames[cam.PresenceStream] {
+			return fmt.Errorf("camera %q: unknown presence_stream %q", cam.Name, cam.PresenceStream)
+		}
 		if cam.Channel < 0 || cam.Channel > 63 {
 			return fmt.Errorf("camera %q: channel %d is out of range (0 to 63)", cam.Name, cam.Channel)
 		}
@@ -469,6 +488,11 @@ func (c *Config) Validate() error {
 			}
 			seenStreams[s] = true
 		}
+		if cam.Sleeps() {
+			// The presence feed is an implicit runner even when it is not
+			// listed in streams, so it still owns the physical stream.
+			seenStreams[cam.PresenceStreamName()] = true
+		}
 
 		// A hub serves each of its cameras as a channel on one address, so
 		// it is address and channel together that name one camera.
@@ -476,7 +500,7 @@ func (c *Config) Validate() error {
 		if cam.Channel != 0 {
 			naddr = fmt.Sprintf("%s#%d", naddr, cam.Channel)
 		}
-		for _, s := range cam.Streams {
+		for s := range seenStreams {
 			if owner, taken := seenAddrStreams[naddr][s]; taken {
 				return fmt.Errorf("camera %q and camera %q share address %q on stream %q: "+
 					"a camera allows only one connection per stream, and a second runner "+
@@ -485,9 +509,9 @@ func (c *Config) Validate() error {
 			}
 		}
 		if seenAddrStreams[naddr] == nil {
-			seenAddrStreams[naddr] = make(map[string]string, len(cam.Streams))
+			seenAddrStreams[naddr] = make(map[string]string, len(seenStreams))
 		}
-		for _, s := range cam.Streams {
+		for s := range seenStreams {
 			seenAddrStreams[naddr][s] = cam.Name
 		}
 

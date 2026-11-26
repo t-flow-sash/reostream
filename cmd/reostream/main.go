@@ -310,16 +310,9 @@ func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlLis
 			return rtspSrv.Readers(rtsp.Path(camera, "main"))
 		})
 		sup.AttachPresence(func(camera string, h *hub.Hub) stream.FrameSink {
-			if p := presence.Lookup(camera); p != nil {
-				return p
-			}
-			p := presence.New(camera, rtspSrv.Add(rtsp.Path(camera, "main")))
-			presence.Register(p)
-			if codec, es := h.Keyframe(); es != nil {
-				p.SeedFrame(codec, es)
-			}
-			go p.Run(supCtx)
-			return p
+			return batteryPresencePlayer(supCtx, camera, h, func() stream.FrameSink {
+				return rtspSrv.Add(rtsp.Path(camera, "main"))
+			})
 		})
 	}
 	if rtspSrv != nil {
@@ -572,6 +565,25 @@ func firstRunLoop(ctx context.Context, configPath, msg string) {
 func firstRunClaimed(configPath string) bool {
 	_, err := os.Stat(configPath)
 	return !errors.Is(err, fs.ErrNotExist)
+}
+
+// batteryPresencePlayer keeps the stable RTSP player but starts a fresh codec
+// generation whenever a reload moves presence ownership to another feed.
+func batteryPresencePlayer(ctx context.Context, camera string, h *hub.Hub, sinkFor func() stream.FrameSink) *presence.Player {
+	if p := presence.Lookup(camera); p != nil {
+		p.Reset()
+		if codec, es := h.Keyframe(); es != nil {
+			p.SeedFrame(codec, es)
+		}
+		return p
+	}
+	p := presence.New(camera, sinkFor())
+	presence.Register(p)
+	if codec, es := h.Keyframe(); es != nil {
+		p.SeedFrame(codec, es)
+	}
+	go p.Run(ctx)
+	return p
 }
 
 // httpShutdownTimeout bounds http.Server.Shutdown itself, once the stream

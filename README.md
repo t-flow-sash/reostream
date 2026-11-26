@@ -140,7 +140,9 @@ Also on port 8560:
   clip the camera uploads.
 - Battery cameras: found by their own UDP search, woken only while someone is watching,
   battery level shown without waking them. Ones paired to a Home Hub sleep too, with
-  `battery = true`.
+  `battery = true`. Their stable RTSP presence path uses `main` by default; set
+  `presence_stream = "sub"` to serve a browser-friendly low-resolution feed instead.
+  `wake_on_rtsp = true` still wakes only that selected feed while a reader is attached.
 - Sessions are closed cleanly. A camera left with an open session refuses connections
   for minutes.
 - A web page on port 8562 for status, live view, config, logs and camera settings.
