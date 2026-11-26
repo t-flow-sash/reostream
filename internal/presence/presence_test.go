@@ -189,3 +189,20 @@ func TestResetDropsClipsQueuedByThePreviousCodecGeneration(t *testing.T) {
 		}
 	}
 }
+
+func TestResetRejectsAnAsynchronousSeedFromThePreviousGeneration(t *testing.T) {
+	s := &reconnectSink{}
+	p := New("porch", s)
+	p.Reset()
+	p.seedGeneration("../mp4read/testdata/h265.mp4", 0)
+	p.Frame(baichuan.Frame{Kind: baichuan.FrameIFrame, Codec: "H264", Data: []byte{0, 0, 0, 1, 0x65}, Micros: 2})
+	fs := video(s.snapshot())
+	if len(fs) == 0 || fs[len(fs)-1].Codec != "H264" {
+		t.Fatalf("frames after stale seed = %+v, want H264", fs)
+	}
+	for _, f := range fs {
+		if f.Codec == "H265" {
+			t.Fatalf("stale H265 seed escaped after Reset: %+v", f)
+		}
+	}
+}

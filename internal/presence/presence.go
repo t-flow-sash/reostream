@@ -217,6 +217,13 @@ func (p *Player) Frame(f baichuan.Frame) {
 // Seed takes the still from a clip already on disk, without playing it:
 // the picture to show until the next clip or live view.
 func (p *Player) Seed(path string) {
+	p.mu.Lock()
+	generation := p.generation
+	p.mu.Unlock()
+	p.seedGeneration(path, generation)
+}
+
+func (p *Player) seedGeneration(path string, generation uint64) {
 	t, err := mp4read.Open(path)
 	if err != nil {
 		return
@@ -232,6 +239,9 @@ func (p *Player) Seed(path string) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.generation != generation {
+		return
+	}
 	if p.adoptLocked(t.Codec, data) {
 		p.primeLocked()
 	}
@@ -279,9 +289,10 @@ func (p *Player) playGeneration(ctx context.Context, path string, generation uin
 		return
 	}
 	if p.codec != "" && t.Codec != p.codec {
+		codec := p.codec
 		p.mu.Unlock()
-		log.Printf("presence: %s: clip is %s but the stream is %s; not played", p.camera, t.Codec, p.codec)
-		p.Seed(path)
+		log.Printf("presence: %s: clip is %s but the stream is %s; not played", p.camera, t.Codec, codec)
+		p.seedGeneration(path, generation)
 		return
 	}
 	p.playing = true
